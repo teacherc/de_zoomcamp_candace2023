@@ -100,16 +100,13 @@ OUTPUT
 ### Code
 
 ```sql
-SELECT MAX(tip_amount),
-	zpu."Zone" AS "pickup_loc",
+SELECT MAX(tip_amount), zpu."Zone" AS "pickup_loc",
     zdo."Zone" AS "dropoff_loc"
-FROM
-    green_taxi_data t,
-    zones zpu,
+FROM green_taxi_data t,
+	zones zpu,
 	zones zdo
-WHERE
-	t."PULocationID" = zpu."LocationID" AND
-    t."DOLocationID" = zdo."LocationID" AND
+WHERE t."PULocationID" = zpu."LocationID" AND
+	t."DOLocationID" = zdo."LocationID" AND
 	zpu."Zone" = 'Astoria'
 GROUP BY zpu."Zone", zdo."Zone"
 ORDER BY 1 DESC LIMIT 5;
