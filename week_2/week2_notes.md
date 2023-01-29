@@ -20,7 +20,7 @@
 
 ### Notes from sources I've found
 
-[What is Data Orchestration?](What is Data Orchestration?)
+[What is Data Orchestration?](https://www.youtube.com/watch?v=iyw9puEmTrA)
 
 - The goal of data engineering is to turn data into useful information
 - Just like a conductor helps a group of musicians play their instruments at the right pace and intensity, a data orchestrator helps us capture data from a variety of sources by coordinating multiple systems and manipulating settings (example: dialing compute resources up or down depending on where we are in the pipeline, turning microservices on and off, etc)
