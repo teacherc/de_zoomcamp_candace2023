@@ -1,5 +1,24 @@
 # Week 2 Notes
 
+[Week 1 notes](https://teacherc.github.io/data-engineering/2023/01/18/zoomcamp1.html) are here if you need them.
+
+- [Week 2 Notes](#week-2-notes)
+  * [What is a Data Lake?](#what-is-a-data-lake-)
+  * [What is Data Orchestration?](#what-is-data-orchestration-)
+    + [Notes from sources I've found](#notes-from-sources-i-ve-found)
+    + [Course video notes](#course-video-notes)
+  * [Introduction to Prefect](#introduction-to-prefect)
+    + [Introduction to Prefect concepts](#introduction-to-prefect-concepts)
+      - [Prepare virtual environment (on a virtual machine)](#prepare-virtual-environment--on-a-virtual-machine-)
+      - [Running the initial ingestion script (without orchestration)](#running-the-initial-ingestion-script--without-orchestration-)
+      - [How will orchestration be better?](#how-will-orchestration-be-better-)
+      - [Integrating Prefect](#integrating-prefect)
+      - [Testing our flow](#testing-our-flow)
+  * [Next](#next)
+
+<small><i><a href='http://ecotrust-canada.github.io/markdown-toc/'>Table of contents generated with markdown-toc</a></i></small>
+
+
 ## What is a Data Lake?
 
 - A data lake allows us to gather vast amounts of unstructured data for later use
