@@ -89,6 +89,8 @@
 - Double check the version of Prefect installed in your virtual environment with ```prefect version```
 - Navigate to the data engineering zoomcamp folder you created in week 1 (in your VM)
 - Open a new terminal in your OS - Find the folder with the Dockerfile and yaml - run ```docker-compose up``` from that folder in the ssh terminal
+- Run ```docker ps```. Copy the name of the database container.
+- Open pgadmin and log in. Add a server - paste the name of the database container for the server name. The username and password should both be ```root```
 - In VSCode, forward the ports ```8080```, ```5432```, and ```8888```
 - Using pgcli or pgadmin in the browser, drop your existing tables
 
@@ -276,6 +278,275 @@ if __name__ == '__main__':
 #### Testing our flow
 - Use pgcli or pgadmin to drop any tables you've ingested ```DROP TABLE yellow_taxi_trips```
 - Run ```python ingest_data.py```
+- Run ```COUNT(*)``` in pgadmin to make sure the data was ingested properly
+- Drop the table you've just ingested and delete the csv.gz file
+
+#### Breaking up the ingest function
+Changed ```ingest_data.py``` code
+```python
+#!/usr/bin/env python
+# coding: utf-8
+import os
+import argparse
+from time import time
+import pandas as pd
+from sqlalchemy import create_engine
+from prefect import flow, task
+from prefect.tasks import task_input_hash
+from datetime import timedelta
+
+@task(log_prints=True, retries=3, cache_key_fn=task_input_hash, cache_expiration=timedelta(days=1))
+def extract_data(csv_url, user, password, host, port, db):
+    if csv_url.endswith('.csv.gz'):
+        csv_name = 'yellow_tripdata_2021-01.csv.gz'
+    else:
+        csv_name = 'output.csv'
+
+    os.system(f"wget {csv_url} -O {csv_name}")
+    postgres_url = f'postgresql://{user}:{password}@{host}:{port}/{db}'
+    engine = create_engine(postgres_url)
+
+    df_iter = pd.read_csv(csv_name, iterator=True, chunksize=100000)
+
+    df = next(df_iter)
+
+    df.tpep_pickup_datetime = pd.to_datetime(df.tpep_pickup_datetime)
+    df.tpep_dropoff_datetime = pd.to_datetime(df.tpep_dropoff_datetime)
+    
+    return df 
+
+@task(log_prints=True)
+def transform_data(df):
+    print(f"pre: missing passenger count: {df['passenger_count'].isin([0]).sum()}")
+    df = df[df['passenger_count'] != 0]
+    print(f"post: missing passenger count: {df['passenger_count'].isin([0]).sum()}")
+    
+    return df 
+
+@task(log_prints=True, retries=3)
+def ingest_data(user, password, host, port, db, table_name, df):
+    
+    postgres_url = f'postgresql://{user}:{password}@{host}:{port}/{db}'
+    engine = create_engine(postgres_url)
+    
+    df.head(n=0).to_sql(name=table_name, con=engine, if_exists='replace')
+    df.to_sql(name=table_name, con=engine, if_exists='append')
+    
+
+@flow(name="Ingest Flow")
+def main():
+    user = "root"
+    password = "root"
+    host = "localhost"
+    port = "5432"
+    db = "ny_taxi"
+    table_name = "yellow_taxi_trips"
+    csv_url = "https://github.com/DataTalksClub/nyc-tlc-data/releases/download/yellow/yellow_tripdata_2021-01.csv.gz"
+
+    raw_data = extract_data(csv_url, user, password, host, port, db)
+    df = transform_data(raw_data)
+    ingest_data(user, password, host, port, db, table_name, df)
+
+if __name__ == '__main__':
+    main()
+```
+
+Notes
+- Add ```task_input_hash``` and ```timedelta``` imports 
+from datetime import timedelta```
+- Pandas's ```.isin()``` function checks to see if a given value exists. To learn more about ```.isin()```, watch [this YouTube clip](https://youtu.be/xe6tPzXlINs?t=80). The ```.sum()``` function returns the sum of values over the requested axis ([Pandas documentation](https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.sum.html). So, ```print({df['passenger_count'].isin([0]).sum()}"))``` tells the total sum of ```passenger_count``` values that do not exist.
+- The ```cache_key_fn``` allows Prefects tasks to use the cached state and figure out if a task should be run again (see [Prefect documentation](https://docs.prefect.io/concepts/tasks/#caching) for more information)
+- ```df = df[df['passenger_count'] != 0]``` - this line transforms the data (it uses Pandas to keep rows where the passenger count is not equal to zero)
+- I took out the ```while``` loop
+
+#### Parameterization and Subflows
+
+Updated code for ```ingest_data.py```
+```python
+import os
+import argparse
+from time import time
+import pandas as pd
+from sqlalchemy import create_engine
+from prefect import flow, task
+from prefect.tasks import task_input_hash
+from datetime import timedelta
+
+@task(log_prints=True, retries=3, cache_key_fn=task_input_hash, cache_expiration=timedelta(days=1))
+def extract_data(csv_url, user, password, host, port, db):
+    # the backup files are gzipped, and it's important to keep the correct extension
+    # for pandas to be able to open the file
+    if csv_url.endswith('.csv.gz'):
+        csv_name = 'yellow_tripdata_2021-01.csv.gz'
+    else:
+        csv_name = 'output.csv'
+
+    os.system(f"wget {csv_url} -O {csv_name}")
+    postgres_url = f'postgresql://{user}:{password}@{host}:{port}/{db}'
+    engine = create_engine(postgres_url)
+
+    df_iter = pd.read_csv(csv_name, iterator=True, chunksize=100000)
+
+    df = next(df_iter)
+
+    df.tpep_pickup_datetime = pd.to_datetime(df.tpep_pickup_datetime)
+    df.tpep_dropoff_datetime = pd.to_datetime(df.tpep_dropoff_datetime)
+    
+    return df 
+
+@task(log_prints=True)
+def transform_data(df):
+    print(f"pre: missing passenger count: {df['passenger_count'].isin([0]).sum()}")
+    df = df[df['passenger_count'] != 0]
+    print(f"post: missing passenger count: {df['passenger_count'].isin([0]).sum()}")
+    
+    return df 
+
+@task(log_prints=True, retries=3)
+def ingest_data(user, password, host, port, db, table_name, df):
+    
+    postgres_url = f'postgresql://{user}:{password}@{host}:{port}/{db}'
+    engine = create_engine(postgres_url)
+    
+    df.head(n=0).to_sql(name=table_name, con=engine, if_exists='replace')
+
+    df.to_sql(name=table_name, con=engine, if_exists='append')
+    
+@flow(name="Subflow", log_prints=True)
+def log_subflow(table_name: str):
+    print(f"Logging Subflow for: {table_name}")
+
+@flow(name="Ingest Flow")
+def main(table_name: str = "yellow_taxi_trips"):
+    user = "root"
+    password = "root"
+    host = "localhost"
+    port = "5432"
+    db = "ny_taxi"
+    csv_url = "https://github.com/DataTalksClub/nyc-tlc-data/releases/download/yellow/yellow_tripdata_2021-01.csv.gz"
+
+    log_subflow(table_name)
+    raw_data = extract_data(csv_url, user, password, host, port, db)
+    df = transform_data(raw_data)
+    ingest_data(user, password, host, port, db, table_name, df)
+
+if __name__ == '__main__':
+    main()
+```
+
+- Subflows are flow functions that are called from within another flow ([documentation](https://docs.prefect.io/concepts/flows/#composing-flows))
+- We added a subflow function
+- The ```table_name``` has been parameterized so it can be defined by a user as an argument
+
+### Orion UI Tour
+
+- Enter ```prefect orion start``` in a ssh terminal
+
+```console
+ ___ ___ ___ ___ ___ ___ _____    ___  ___ ___ ___  _  _
+| _ \ _ \ __| __| __/ __|_   _|  / _ \| _ \_ _/ _ \| \| |
+|  _/   / _|| _|| _| (__  | |   | (_) |   /| | (_) | .` |
+|_| |_|_\___|_| |___\___| |_|    \___/|_|_\___\___/|_|\_|
+
+Configure Prefect to communicate with the server with:
+
+    prefect config set PREFECT_API_URL=http://127.0.0.1:4200/api
+
+View the API reference documentation at http://127.0.0.1:4200/docs
+
+Check out the dashboard at http://127.0.0.1:4200
+```
+- Forward the port in VSCode (in my case, port 4200)
+- Open the UI in the browser
+- Run the ```prefect config set``` command given when Orion starts (```prefect config set PREFECT_API_URL=http://127.0.0.1:4200/api``` in my case)
+
+Orion UI in the browser
+
+![ORION UI](./orion1.png)
+
+### Overview of Blocks
+[Prefect's documentation](https://docs.prefect.io/concepts/blocks/) says it best: "Blocks are a primitive within Prefect that enable the storage of configuration and provide an interface for interacting with external systems. Blocks are useful for configuration that needs to be shared across flow runs and between flows."
+
+- Block names are immutable (they cannot be changed) - this allows us to use them across our codebase
+- Blocks can be used to manage configurations with services that are external to Prefect
+- Prefect's collections are pip-installable packages with pre-made tests: https://docs.prefect.io/collections/catalog/
+- For example, this is [Prefect's SQLAlchemy block](https://prefecthq.github.io/prefect-sqlalchemy/)
+- We've already installed ```prefect-sqlalchemy``` via ```requirements.txt```
+- Add the sqlalchemy connector (listed on Prefect's Blocks page)
+    -  Give it a name
+    - Use the ```SyncDriver``` called ```postgresql + psycopg2```
+    - Populate the arguments with this information (note: yours might look a bit different depending on your ports and username/password):
+        ```python
+        user = "root"
+        password = "root"
+        host = "localhost"
+        port = "5432"
+        db = "ny_taxi"
+        ```
+    - Copy-paste the code snippet you get after you submit the information
+
+Updated Prefect Block in ```ingest_data.py``` code
+```python
+import os
+import argparse
+from time import time
+import pandas as pd
+from sqlalchemy import create_engine
+from prefect import flow, task
+from prefect.tasks import task_input_hash
+from datetime import timedelta
+from prefect_sqlalchemy import SqlAlchemyConnector
+
+
+@task(log_prints=True, tags=["extract"], cache_key_fn=task_input_hash, cache_expiration=timedelta(days=1))
+def extract_data(url: str):
+    if url.endswith('.csv.gz'):
+        csv_name = 'yellow_tripdata_2021-01.csv.gz'
+    else:
+        csv_name = 'output.csv'
+    
+    os.system(f"wget {url} -O {csv_name}")
+
+    df_iter = pd.read_csv(csv_name, iterator=True, chunksize=100000)
+
+    df = next(df_iter)
+
+    df.tpep_pickup_datetime = pd.to_datetime(df.tpep_pickup_datetime)
+    df.tpep_dropoff_datetime = pd.to_datetime(df.tpep_dropoff_datetime)
+
+    return df
+
+@task(log_prints=True)
+def transform_data(df):
+    print(f"pre: missing passenger count: {df['passenger_count'].isin([0]).sum()}")
+    df = df[df['passenger_count'] != 0]
+    print(f"post: missing passenger count: {df['passenger_count'].isin([0]).sum()}")
+    return df
+
+@task(log_prints=True, retries=3)
+def load_data(table_name, df):
+    
+    connection_block = SqlAlchemyConnector.load("postgres-connector")
+    with connection_block.get_connection(begin=False) as engine:
+        df.head(n=0).to_sql(name=table_name, con=engine, if_exists='replace')
+        df.to_sql(name=table_name, con=engine, if_exists='append')
+
+@flow(name="Subflow", log_prints=True)
+def log_subflow(table_name: str):
+    print(f"Logging Subflow for: {table_name}")
+
+@flow(name="Ingest Data")
+def main_flow(table_name: str):
+
+    csv_url = "https://github.com/DataTalksClub/nyc-tlc-data/releases/download/yellow/yellow_tripdata_2021-01.csv.gz"
+    log_subflow(table_name)
+    raw_data = extract_data(csv_url)
+    data = transform_data(raw_data)
+    load_data(table_name, data)
+
+if __name__ == '__main__':
+    main_flow(table_name = "yellow_trips")
+```
 
 
 ## Next
