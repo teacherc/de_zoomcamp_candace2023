@@ -87,8 +87,45 @@
 - Activate the environment you've just created. My example: ```conda activate zoomcamp```
 - Navigate to the folder with the Prefect code in it and use pip to install the requirements ```pip install -r requirements.txt ```
 - Double check the version of Prefect installed in your virtual environment with ```prefect version```
-- Navigate to the data engineering zoomcamp folder you created in week 1 (in your VM)
+- - Make sure you have also cloned the [Zoomcamp repo](https://github.com/DataTalksClub/data-engineering-zoomcamp)
+- Navigate to this data engineering zoomcamp folder
 - Open a new terminal in your OS - Find the folder with the Dockerfile and yaml - run ```docker-compose up``` from that folder in the ssh terminal
+
+docker-compose.yaml
+```yaml
+services:
+  pgdatabase:
+    image: postgres:13
+    environment:
+      - POSTGRES_USER=root
+      - POSTGRES_PASSWORD=root
+      - POSTGRES_DB=ny_taxi
+    volumes:
+      - "./ny_taxi_postgres_data:/var/lib/postgresql/data:rw"
+    ports:
+      - "5432:5432"
+  pgadmin:
+    image: dpage/pgadmin4
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=admin@admin.com
+      - PGADMIN_DEFAULT_PASSWORD=root
+    ports:
+      - "8080:80"
+```
+
+Dockerfile
+```yaml
+FROM python:3.9.1
+
+RUN apt-get install wget
+RUN pip install pandas sqlalchemy psycopg2
+
+WORKDIR /app
+COPY ingest_data.py ingest_data.py 
+
+ENTRYPOINT [ "python", "ingest_data.py" ]
+```
+
 - Run ```docker ps```. Copy the name of the database container.
 - Open pgadmin and log in. Add a server - paste the name of the database container for the server name. The username and password should both be ```root```
 - In VSCode, forward the ports ```8080```, ```5432```, and ```8888```
@@ -547,10 +584,313 @@ def main_flow(table_name: str):
 if __name__ == '__main__':
     main_flow(table_name = "yellow_trips")
 ```
+## ETL with GCP and Prefect
+
+### Preparing our environment
+
+- Make sure you are ssh'd into the GCP VM
+- Open at least two ssh terminals in VSCode
+- Use ```conda activate``` to activate your conda environment in each open terminal (mine is ```conda activate zoomcamp```)
+- In one terminal, use ```prefect orion start``` to start the local Orion server
+- You might need to run ```prefect config set PREFECT_API_URL=http://127.0.0.1:4200/api``` to help Prefect communicate with the Orion server
+- In a browser, navigate to the link given by the Orion server (example: ```http://127.0.0.1:4200```). Make sure the port is being forwarded in VSCode.
+- In the folder where you are working, make a new folder called ```02_gcp```. In that folder, create a file called ```etl_web_to_gcs.py```.
+
+### Make a flow
+
+- One main flow function will call other task functions
+- This function will take the yellow taxi data from the web, clean it up (transform it), and then save it as a parquet file in our data lake in Google Cloud Storage (GCS)
+- Add relevant imports
+
+```python
+from pathlib import Path
+import pandas as pd
+from prefect import flow, task
+from prefect_gcp.cloud_storage import GcsBucket
+```
+
+- Make our flow
+
+```python
+from pathlib import Path
+import pandas as pd
+from prefect import flow, task
+from prefect_gcp.cloud_storage import GcsBucket
+
+@task(retries=3)
+def fetch(dataset_url: str) -> pd.DataFrame:
+    """Read taxi data from web into Pandas dataframe"""
+
+    df = pd.read_csv(dataset_url)
+
+    return df
+
+@flow()
+def etl_web_to_gcs() -> None:
+    """This is the main ETL function"""
+    color = "yellow"
+    year = "2021"
+    month = 1
+    dataset_file = f"{color}_tripdata_{year}-{month:02}"
+    dataset_url = f"https://github.com/DataTalksClub/nyc-tlc-data/releases/download/{color}/{dataset_file}.csv.gz" 
+
+    df = fetch(dataset_url)
+
+if __name__ == '__main__':
+    etl_web_to_gcs()
+
+```
+
+Notes on the flow code:
+- These are hardcoded now, but we will parameterize these arguments later
+- The ```dataset_file``` is an fstring that comes from how filenames are used on the NY Taxi site
+- The ```dataset_url``` is an fstring that creates the right URL to pull data
+- Added a ```retries``` argument to the task function - this is useful when getting data from the web
+
+Next steps:
+- Run the flow with ```python etl_web_to_gcs.py```
+
+
+### Add a Transform task
+
+```python
+from pathlib import Path
+import pandas as pd
+from prefect import flow, task
+from prefect_gcp.cloud_storage import GcsBucket
+
+@task()
+def fetch(dataset_url: str) -> pd.DataFrame:
+    """Read taxi data from web into Pandas dataframe"""
+
+    df = pd.read_csv(dataset_url)
+
+    return df
+
+@task(log_prints=True)
+def clean(df=pd.DataFrame) -> pd.DataFrame:
+    """Fix dtype issues"""
+    df["tpep_pickup_datetime"] = pd.to_datetime(df["tpep_pickup_datetime"])
+    df["tpep_dropoff_datetime"] = pd.to_datetime(df["tpep_dropoff_datetime"])
+    print(df.head(2))
+    print(f"columns: {df.dtypes}")
+    print(f"rows: {len(df)}")
+    
+    return df
+
+@flow()
+def etl_web_to_gcs() -> None:
+    """This is the main ETL function"""
+    color = "yellow"
+    year = "2021"
+    month = 1
+    dataset_file = f"{color}_tripdata_{year}-{month:02}"
+    dataset_url = f"https://github.com/DataTalksClub/nyc-tlc-data/releases/download/{color}/{dataset_file}.csv.gz" 
+
+    df = fetch(dataset_url)
+    df_clean = clean(df)
+
+if __name__ == '__main__':
+    etl_web_to_gcs()
+
+```
+
+Notes:
+- Added the new ```clean``` task function to cast two columns as datetime and print the first two rows
+- Called the task from the main flow function
+
+### Make a task to write to our local file system
+
+Add a write_local task
+```python
+from pathlib import Path
+import pandas as pd
+from prefect import flow, task
+from prefect_gcp.cloud_storage import GcsBucket
+
+@task()
+def fetch(dataset_url: str) -> pd.DataFrame:
+    """Read taxi data from web into Pandas dataframe"""
+
+    df = pd.read_csv(dataset_url)
+
+    return df
+
+@task(log_prints=True)
+def clean(df=pd.DataFrame) -> pd.DataFrame:
+    """Fix dtype issues"""
+    df["tpep_pickup_datetime"] = pd.to_datetime(df["tpep_pickup_datetime"])
+    df["tpep_dropoff_datetime"] = pd.to_datetime(df["tpep_dropoff_datetime"])
+    print(df.head(2))
+    print(f"columns: {df.dtypes}")
+    print(f"rows: {len(df)}")
+    
+    return df
+
+@task()
+def write_local(df: pd.DataFrame, color: str, dataset_file: str) -> Path:
+    """Write DataFrame out locally as parquet file"""
+    path = Path(f"data/{color}/{dataset_file}.parquet")
+    df.to_parquet(path, compression="gzip")
+    return path
+
+@flow()
+def etl_web_to_gcs() -> None:
+    """This is the main ETL function"""
+    color = "yellow"
+    year = "2021"
+    month = 1
+    dataset_file = f"{color}_tripdata_{year}-{month:02}"
+    dataset_url = f"https://github.com/DataTalksClub/nyc-tlc-data/releases/download/{color}/{dataset_file}.csv.gz" 
+
+    df = fetch(dataset_url)
+    df_clean = clean(df)
+    path = write_local(df_clean, color, dataset_file)
+
+if __name__ == '__main__':
+    etl_web_to_gcs()
+
+```
+
+Notes
+- The ```write_local``` task function returns a ```pathlib``` ```Path``` object
+- Parquet files are more compact than csv or gz files
+- You need to make a ```flows/02_gcp/data/yellow``` before you run the Python script
+
+### Make a task to write to GCS (part 1)
+
+
+### GCS overview
+
+- Head to ```cloud.google.com```
+- Make sure you've selected the project you've created for this course
+- Navigate to Google Cloud Storage
+- Click ```+ Create``` to make a new bucket
+- Make a name (keep the rest of the default fields) and click create
+- Note the name of your bucket (mine is ```first_prefect_bucket```)
+
+### Prefect Blocks: GCS Bucket
+
+- Head to the Prefect Orion UI in your browser
+- Click on ```Blocks```
+- Go to a ssh terminal and use ```prefect block register -m prefect_gcp``` to add additional GCP Blocks
+
+```console
+Successfully registered 6 blocks
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Registered Blocks             ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ BigQuery Warehouse            │
+│ GCP Cloud Run Job             │
+│ GCP Credentials               │
+│ GcpSecret                     │
+│ GCS Bucket                    │
+│ Vertex AI Custom Training Job │
+└───────────────────────────────┘
+
+ To configure the newly registered blocks, go to the Blocks page in the Prefect UI: 
+http://127.0.0.1:4200/blocks/catalog
+```
+
+- Refresh your browser window
+- Add a Block - select ```GCS Bucket```
+- Make the Block Name anything you want (I went with ```zoom-gcs```)
+- Under Bucket, add the name of your GCS bucket (mine is ```first_prefect_bucket```)
+- Under GCP Credentials, click ADD
+
+### Prefect Blocks: GCS Credentials and Service Accounts
+- Block name - ```zoom-gcp-creds```
+- In the GCP console, navigate to the IAM & Admin --> Service Accounts page
+- Click ```+ Create Service Account```
+- Name: ```zoom-de-service-acct```
+- I would vary the service address a bit instead of using one that is the exact name
+- Click next to add roles
+- Add ```BigQuery Admin``` and ```Storage Admin``` (```Storage Admin``` is found under Google Cloud Storage)
+- Click continue and done
+- On the next page, find the new service account. Under actions, select ```Manage Keys```
+- Click ```Add Key``` and ```Create New Key```
+- Select JSON
+- Save this file in a SECURE location (this file should not be uploaded to any GitHub repo - I use a secure file vault for keys)
+- Open the file you've save with a text editor. Copy this text and paste it into the ```Service Account Info``` area of the credential Block creation page in Orion
+- Click ```Create``` and it will take you back to the GCS Bucket Block creation page
+- Select the credential you just created
+- Click ```Create```
+- Copy the snippet text on the next page
+```python
+from prefect_gcp.cloud_storage import GcsBucket
+gcp_cloud_storage_bucket_block = GcsBucket.load("zoom-gcs")
+```
+
+### Prefect Blocks: Write to GCS (part 2)
+
+Code changes - add a ```write_gcs``` task (learn more about methods in the [Prefect Docs](https://prefecthq.github.io/prefect-gcp/cloud_storage/))
+```python
+from pathlib import Path
+import pandas as pd
+from prefect import flow, task
+from prefect_gcp.cloud_storage import GcsBucket
+
+@task()
+def fetch(dataset_url: str) -> pd.DataFrame:
+    """Read taxi data from web into Pandas dataframe"""
+
+    df = pd.read_csv(dataset_url)
+
+    return df
+
+@task(log_prints=True)
+def clean(df=pd.DataFrame) -> pd.DataFrame:
+    """Fix dtype issues"""
+    df["tpep_pickup_datetime"] = pd.to_datetime(df["tpep_pickup_datetime"])
+    df["tpep_dropoff_datetime"] = pd.to_datetime(df["tpep_dropoff_datetime"])
+    print(df.head(2))
+    print(f"columns: {df.dtypes}")
+    print(f"rows: {len(df)}")
+    
+    return df
+
+@task()
+def write_local(df: pd.DataFrame, color: str, dataset_file: str) -> Path:
+    """Write DataFrame out locally as parquet file"""
+    path = Path(f"data/{color}/{dataset_file}.parquet")
+    df.to_parquet(path, compression="gzip")
+    return path
+
+@task()
+def write_gcs(path: Path) -> None:
+    """Upload local parquet file to GCS"""
+    gcs_block = GcsBucket.load("zoom-gcs")
+    gcs_block.upload_from_path(from_path=path, to_path=path)
+    return
+
+@flow()
+def etl_web_to_gcs() -> None:
+    """This is the main ETL function"""
+    color = "yellow"
+    year = "2021"
+    month = 1
+    dataset_file = f"{color}_tripdata_{year}-{month:02}"
+    dataset_url = f"https://github.com/DataTalksClub/nyc-tlc-data/releases/download/{color}/{dataset_file}.csv.gz" 
+
+    df = fetch(dataset_url)
+    df_clean = clean(df)
+    path = write_local(df_clean, color, dataset_file)
+    write_gcs(path)
+
+if __name__ == '__main__':
+    etl_web_to_gcs()
+
+```
+
+- Run this code in the ssh terminal
+- Head to Orion and check out the flow run logs
+![Prefect Flow Log](./prefect_run.png)
+- You should also be able to navigate to the parquet file in the GCS Bucket
+![Google Cloud Storage Bucket](./first_prefect_bucket.png)
 
 
 ## Next
-- ETL with GCP and Prefect
 - GCS to Big Query
 - Parametrizing Flow and Deployments
 - Schedules & Docker Storage with Infrastructure
