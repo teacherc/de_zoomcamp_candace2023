@@ -2,33 +2,37 @@
 
 [Week 1 notes](https://teacherc.github.io/data-engineering/2023/01/18/zoomcamp1.html) are here if you need them.
 
-- [Week 2 Notes](#week-2-notes)
-  * [What is a Data Lake?](#what-is-a-data-lake-)
-  * [What is Data Orchestration?](#what-is-data-orchestration-)
-    + [Notes from sources I've found](#notes-from-sources-i-ve-found)
-    + [Course video notes](#course-video-notes)
-  * [Introduction to Prefect](#introduction-to-prefect)
-    + [Introduction to Prefect concepts](#introduction-to-prefect-concepts)
-      - [Prepare virtual environment (on a virtual machine)](#prepare-virtual-environment--on-a-virtual-machine-)
-      - [Running the initial ingestion script (without orchestration)](#running-the-initial-ingestion-script--without-orchestration-)
-      - [How will orchestration be better?](#how-will-orchestration-be-better-)
-      - [Integrating Prefect](#integrating-prefect)
-      - [Testing our flow](#testing-our-flow)
-      - [Breaking up the ingest function](#breaking-up-the-ingest-function)
-      - [Parameterization and Subflows](#parameterization-and-subflows)
-    + [Orion UI Tour](#orion-ui-tour)
-    + [Overview of Blocks](#overview-of-blocks)
-  * [ETL with GCP and Prefect](#etl-with-gcp-and-prefect)
-    + [Preparing our environment](#preparing-our-environment)
-    + [Make a flow](#make-a-flow)
-    + [Add a Transform task](#add-a-transform-task)
-    + [Make a task to write to our local file system](#make-a-task-to-write-to-our-local-file-system)
-    + [Make a task to write to GCS (part 1)](#make-a-task-to-write-to-gcs--part-1-)
-    + [GCS overview](#gcs-overview)
-    + [Prefect Blocks: GCS Bucket](#prefect-blocks--gcs-bucket)
-    + [Prefect Blocks: GCS Credentials and Service Accounts](#prefect-blocks--gcs-credentials-and-service-accounts)
-    + [Prefect Blocks: Write to GCS (part 2)](#prefect-blocks--write-to-gcs--part-2-)
-  * [Next](#next)
+- [What is a Data Lake?](#what-is-a-data-lake-)
+- [What is Data Orchestration?](#what-is-data-orchestration-)
+  * [Notes from sources I've found](#notes-from-sources-i-ve-found)
+  * [Course video notes](#course-video-notes)
+- [Introduction to Prefect](#introduction-to-prefect)
+  * [Introduction to Prefect concepts](#introduction-to-prefect-concepts)
+    + [Prepare virtual environment (on a virtual machine)](#prepare-virtual-environment--on-a-virtual-machine-)
+    + [Running the initial ingestion script (without orchestration)](#running-the-initial-ingestion-script--without-orchestration-)
+    + [How will orchestration be better?](#how-will-orchestration-be-better-)
+    + [Integrating Prefect](#integrating-prefect)
+    + [Testing our flow](#testing-our-flow)
+    + [Breaking up the ingest function](#breaking-up-the-ingest-function)
+    + [Parameterization and Subflows](#parameterization-and-subflows)
+  * [Orion UI Tour](#orion-ui-tour)
+  * [Overview of Blocks](#overview-of-blocks)
+- [ETL with GCP and Prefect](#etl-with-gcp-and-prefect)
+  * [Preparing our environment](#preparing-our-environment)
+  * [Make a flow](#make-a-flow)
+  * [Add a Transform task](#add-a-transform-task)
+  * [Make a task to write to our local file system](#make-a-task-to-write-to-our-local-file-system)
+  * [Make a task to write to GCS (part 1)](#make-a-task-to-write-to-gcs--part-1-)
+  * [GCS overview](#gcs-overview)
+  * [Prefect Blocks: GCS Bucket](#prefect-blocks--gcs-bucket)
+  * [Prefect Blocks: GCS Credentials and Service Accounts](#prefect-blocks--gcs-credentials-and-service-accounts)
+  * [Prefect Blocks: Write to GCS (part 2)](#prefect-blocks--write-to-gcs--part-2-)
+- [GCS to Big Query](#gcs-to-big-query)
+  * [00:22 Prefect Flow: GCS to BigQuery / 02:24 Prefect Task: Extract from GCS](#00-22-prefect-flow--gcs-to-bigquery---02-24-prefect-task--extract-from-gcs)
+  * [08:33 Prefect Task: Data Transformation](#08-33-prefect-task--data-transformation)
+  * [12:19 Prefect Task: Load into BigQuery - Part I  /  14:07 BigQuery: Overview & Data Import from GCS / 17:10 Prefect Task: Load into BigQuery - Part II](#12-19-prefect-task--load-into-bigquery---part-i-----14-07-bigquery--overview---data-import-from-gcs---17-10-prefect-task--load-into-bigquery---part-ii)
+  * [20:13 BigQuery: Querying the Data](#20-13-bigquery--querying-the-data)
+- [Next](#next)
 
 <small><i><a href='http://ecotrust-canada.github.io/markdown-toc/'>Table of contents generated with markdown-toc</a></i></small>
 
@@ -904,8 +908,177 @@ if __name__ == '__main__':
 ![Google Cloud Storage Bucket](./first_prefect_bucket.png)
 
 
+## GCS to Big Query
+
+### 00:22 Prefect Flow: GCS to BigQuery / 02:24 Prefect Task: Extract from GCS
+
+add imports and main ETL flow
+```python
+from pathlib import Path
+import pandas as pd
+from prefect import flow, task
+from prefect_gcp.cloud_storage import GcsBucket
+from prefect_gcp import GcpCredentials
+
+@task(retries=3)
+def extract_from_gcs(color: str, year: int, month: int) -> Path:
+    """Download trip data from GCS"""
+    gcs_path = f"data/{color}/{color}_tripdata_{year}-{month:02}.parquet"
+    gcs_block = GcsBucket.load("zoom-gcs")
+    gcs_block.get_directory(from_path=gcs_path, local_path=f"../data/")
+    
+    return Path(f"../data/{gcs_path}")
+
+
+@flow()
+def etl_gcs_to_bq():
+    """Main ETL flow to load data into Big Query"""
+    color = "yellow"
+    year = 2021
+    month = 1
+
+    path = extract_from_gcs(color, year, month)
+
+if __name__ == "__main__":
+    etl_gcs_to_bq()
+```
+
+Notes
+- We have a function to extract data from the data lake because this mirrors a data lake best practice - giving people in an organization a way to access data
+- Breaking up the flow into pieces allows for people to use what they need
+- The ```gcs_path``` reflects the organization of the GCS Bucket (we can check this in the Console UI)
+- We're using ```.get_directory``` and ```GCSBucket.load``` methods from the GCS Block
+    - This argument ```local_path=f"../data/"``` takes us up a level into the data folder
+- When you run this code, you should see the parquet file in the VM file structure in the right location
+
+### 08:33 Prefect Task: Data Transformation
+
+```python
+from pathlib import Path
+import pandas as pd
+from prefect import flow, task
+from prefect_gcp.cloud_storage import GcsBucket
+from prefect_gcp import GcpCredentials
+
+@task(retries=3)
+def extract_from_gcs(color: str, year: int, month: int) -> Path:
+    """Download trip data from GCS"""
+    gcs_path = f"data/{color}/{color}_tripdata_{year}-{month:02}.parquet"
+    gcs_block = GcsBucket.load("zoom-gcs")
+    gcs_block.get_directory(from_path=gcs_path, local_path=f"../data/")
+    
+    return Path(f"../data/{gcs_path}")
+
+@task()
+def transform(path: Path) -> pd.DataFrame:
+    """Data cleaning example"""
+    df = pd.read_parquet(path)
+    print(f"pre: missing passenger count: {df['passenger_count'].isna().sum()}")
+    df["passenger_count"].fillna(0, inplace=True)
+    print(f"post: missing passenger count: {df['passenger_count'].isna().sum()}")
+    
+    return df
+
+
+@flow()
+def etl_gcs_to_bq():
+    """Main ETL flow to load data into Big Query"""
+    color = "yellow"
+    year = 2021
+    month = 1
+
+    path = extract_from_gcs(color, year, month)
+    df = transform(path)
+
+if __name__ == "__main__":
+    etl_gcs_to_bq()
+```
+Notes
+- [Pandas .isna documentation](https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.isna.html)
+- [Pandas .fillna documentation](https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.fillna.html)
+- We use ```.fillna``` to fill N/A passenger counts with zeroes - we are making the assumption that if it has the value N/A, then someone forgot to put 0
+
+### 12:19 Prefect Task: Load into BigQuery - Part I  /  14:07 BigQuery: Overview & Data Import from GCS / 17:10 Prefect Task: Load into BigQuery - Part II
+
+```python
+from pathlib import Path
+import pandas as pd
+from prefect import flow, task
+from prefect_gcp.cloud_storage import GcsBucket
+from prefect_gcp import GcpCredentials
+
+
+@task(retries=3)
+def extract_from_gcs(color: str, year: int, month: int) -> Path:
+    """Download trip data from GCS"""
+    gcs_path = f"data/{color}/{color}_tripdata_{year}-{month:02}.parquet"
+    gcs_block = GcsBucket.load("zoom-gcs")
+    gcs_block.get_directory(from_path=gcs_path, local_path=f"../data/")
+    return Path(f"../data/{gcs_path}")
+
+
+@task()
+def transform(path: Path) -> pd.DataFrame:
+    """Data cleaning example"""
+    df = pd.read_parquet(path)
+    print(f"pre: missing passenger count: {df['passenger_count'].isna().sum()}")
+    df["passenger_count"].fillna(0, inplace=True)
+    print(f"post: missing passenger count: {df['passenger_count'].isna().sum()}")
+    return df
+
+@task()
+def write_bq(df: pd.DataFrame) -> None:
+    """Write DataFrame to BiqQuery"""
+
+    gcp_credentials_block = GcpCredentials.load("zoom-gcp-creds")
+
+    df.to_gbq(
+        destination_table="dezoomcamp.rides",
+        project_id="neural-caldron-375619",
+        credentials=gcp_credentials_block.get_credentials_from_service_account(),
+        chunksize=500_000,
+        if_exists="append",
+    )
+
+@flow()
+def etl_gcs_to_bq():
+    """Main ETL flow to load data into Big Query"""
+    color = "yellow"
+    year = 2021
+    month = 1
+
+    path = extract_from_gcs(color, year, month)
+    df = transform(path)
+    write_bq(df)
+
+
+if __name__ == "__main__":
+    etl_gcs_to_bq()
+
+```
+
+Notes
+- [Pandas df.to_gbq documentation](https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.to_gbq.html)
+- To load data from GCS to GBQ, we can use the GUI in the console. Search for "Big Query", add data, and select GCS as the source. Fill out the mandatory fields in the GUI. 
+    - The data we loaded is visible in Big Query (rides table)
+
+![Rides table in GBQ](./gbq_rides1.png)
+
+    - Click on ```query in a new tab``` to check out the data. Then, delete it with this query: ```DELETE FROM `NAME_OF_PROJ.rides` WHERE true; ```
+- Now, we'll simulate loading with the Prefect script
+- After we use the Prefect script, we can check the run in Orion and in Big Query
+![Prefect Orion Flow Run](./finished_run.png)
+
+
+### 20:13 BigQuery: Querying the Data
+
+Run these queries in GBQ to make sure the data was ingested properly
+
+```SELECT COUNT(*) FROM `PROJECT_NAME.dezoomcamp.rides` ```
+
+```SELECT * FROM `PROJECT_NAME.dezoomcamp.rides` LIMIT 1000```
+
 ## Next
-- GCS to Big Query
 - Parametrizing Flow and Deployments
 - Schedules & Docker Storage with Infrastructure
 - Prefect Cloud and Additional Resources
