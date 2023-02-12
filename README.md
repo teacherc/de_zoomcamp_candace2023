@@ -11,5 +11,5 @@
 - [Homework](https://github.com/teacherc/de_zoomcamp_candace2023/blob/main/week_2/homework.md)
 
 ## Week 3
-- [Notes](week_3/homework.md)
+- [Notes](week_3/notes.md)
 - Homework (posted after due date)
