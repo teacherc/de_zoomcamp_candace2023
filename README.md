@@ -8,4 +8,4 @@
 ## Week 2 (In Progress)
 
 - [Notes](https://github.com/teacherc/de_zoomcamp_candace2023/blob/main/week_2/week2_notes.md)
-- Homework (Coming Soon)
+- [Homework](https://github.com/teacherc/de_zoomcamp_candace2023/blob/main/week_2/homework.md)
