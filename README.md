@@ -12,4 +12,8 @@
 
 ## Week 3
 - [Notes](week_3/notes.md)
-- Homework (posted after due date)
+- [Homework](week_3/homework.md)
+
+## Week 4
+- Notes
+- Homework (posted after the due date)
