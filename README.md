@@ -2,7 +2,7 @@
 
 ## Week 1
 
-- [Notes](https://teacherc.github.io/data-engineering/2023/01/18/zoomcamp1.html)
+- [Notes](https://candace.dev/zoomcamp-1/)
 - [Homework](https://github.com/teacherc/de_zoomcamp_candace2023/tree/working/week_1)
 
 ## Week 2
